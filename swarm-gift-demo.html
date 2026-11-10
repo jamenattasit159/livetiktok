@@ -21,8 +21,15 @@ body{display:flex;justify-content:center;padding-top:8px;box-sizing:border-box}
 
 #legend{position:absolute;right:12px;top:24px;width:170px;box-sizing:border-box;padding:10px 12px;border-radius:10px;
   background:#1c1c1fe6;color:#fff;font-size:13px;line-height:1.9;z-index:4}
-#legend b{float:right;font-weight:600;font-variant-numeric:tabular-nums}
-#legend div{margin-top:6px;padding-top:4px;border-top:1px solid #fff3}
+#legend p,#legend div{display:flex;justify-content:space-between;gap:8px;margin:0}
+#legend span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#legend b{font-weight:600;font-variant-numeric:tabular-nums}
+#legend p+div{margin-top:6px;padding-top:4px;border-top:1px solid #fff3}
+.status{position:absolute;left:24px;bottom:12px;z-index:4;background:#1c1c1fe6;color:#fff;font-size:12px;padding:4px 10px;border-radius:6px}
+.status:empty{display:none}
+#panel[hidden]{display:none}
+.card{cursor:pointer}
+.gf img{height:1.3em;vertical-align:-.3em;margin-right:.2em}
 .crown{position:absolute;left:0;right:0;top:calc(var(--w)*-.05);text-align:center;font-size:calc(var(--w)*.2);line-height:1;
   transform:translateY(-40px) rotate(-30deg) scale(0);transition:transform .45s cubic-bezier(.3,1.6,.5,1)}
 .crown.on{transform:rotate(-8deg)}
@@ -74,24 +81,29 @@ body{display:flex;justify-content:center;padding-top:8px;box-sizing:border-box}
 
 <script>
 const W=540,H=960,stage=document.getElementById('stage');
-// w = card width, n = cursors recruited, top = biggest prize (gets the crown). Coins are demo values.
-const GIFTS={
-  rose:{icon:'🌹',label:'Rose',coins:1,w:130,n:1,color:'#0d99ff'},
-  heart:{icon:'🤞',label:'Finger Heart',coins:5,w:150,n:1,color:'#14ae5c'},
-  donut:{icon:'🍩',label:'Doughnut',coins:30,w:190,n:2,color:'#9747ff'},
-  cap:{icon:'🧢',label:'Cap',coins:99,w:230,n:2,color:'#f24e9e'},
-  galaxy:{icon:'🌌',label:'Galaxy',coins:1000,w:300,n:3,color:'#e5484d'},
-  lion:{icon:'🦁',label:'Lion',coins:29999,w:380,n:3,color:'#ff8a00',top:true},
-};
-const ids=Object.keys(GIFTS),tally={},legend=document.getElementById('legend');
-function addTally(id,n){
-  if(id)tally[id]=(tally[id]||0)+n;
-  const total=ids.reduce((s,k)=>s+(tally[k]||0)*GIFTS[k].coins,0);
-  legend.innerHTML=ids.map(k=>`${GIFTS[k].icon} ${GIFTS[k].label} <b>${tally[k]||0}</b>`).join('<br>')
-    +`<div>รวมเหรียญ <b>${total.toLocaleString()}</b></div>`}
-addTally();
+// Tier is picked from the coin price of ONE gift. w = card width, n = cursors recruited, top = gets the crown.
+const TIERS=[
+  {min:0,w:130,n:1,color:'#0d99ff'},
+  {min:5,w:150,n:1,color:'#14ae5c'},
+  {min:30,w:190,n:2,color:'#9747ff'},
+  {min:99,w:230,n:2,color:'#f24e9e'},
+  {min:1000,w:300,n:3,color:'#e5484d'},
+  {min:10000,w:380,n:3,color:'#ff8a00',top:true},
+];
+const tierFor=coins=>TIERS.findLast(t=>coins>=t.min)||TIERS[0];
+console.assert(tierFor(1)==TIERS[0]&&tierFor(99)==TIERS[3]&&tierFor(29999).top&&tierFor(NaN)==TIERS[0],'tierFor');
+
+// tally by real gift name; shows the 6 priciest kinds, total covers everything
+const tally=new Map(),legend=document.getElementById('legend');
+function addTally(giftName,coins,n){
+  if(giftName){const t=tally.get(giftName)||{giftName,coins,n:0};t.n+=n;tally.set(giftName,t)}
+  const all=[...tally.values()].sort((a,b)=>b.coins-a.coins);
+  const row=(tag,label,val)=>{const p=document.createElement(tag),s=el('span','',p);s.textContent=label;el('b','',p).textContent=val;return p};
+  legend.replaceChildren(...all.slice(0,6).map(t=>row('p',t.giftName,t.n)),
+    row('div','รวมเหรียญ',all.reduce((s,t)=>s+t.n*t.coins,0).toLocaleString()))}
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const el=(tag,cls,parent)=>{const e=document.createElement(tag);e.className=cls;parent.append(e);return e};
+addTally();
 const seg=s=>[...new Intl.Segmenter().segment(s)].map(x=>x.segment); // Thai-safe "characters"
 const tween=(ms,f)=>new Promise(r=>{const t0=performance.now();(function st(t){
   const k=Math.min(1,Math.max(0,(t-t0)/ms));f(k<.5?2*k*k:1-2*(1-k)*(1-k));k<1?requestAnimationFrame(st):r()})(t0)});
@@ -123,19 +135,24 @@ async function acquire(n){for(;;){const free=swarm.filter(c=>!c.busy);
 /* ---- card placement: random spot with no overlap, evict oldest finished cards when full ---- */
 const cards=[{x:W-190,y:14,w:190,h:215}]; // legend area, never evicted (no .done)
 const hit=(a,b,m=8)=>a.x<b.x+b.w+m&&b.x<a.x+a.w+m&&a.y<b.y+b.h+m&&b.y<a.y+a.h+m;
+function drop(r){cards.splice(cards.indexOf(r),1);r.el.classList.add('out');setTimeout(()=>r.el.remove(),400)}
+// moderation: click a finished card to take it off screen
+stage.addEventListener('click',e=>{const r=cards.find(c=>c.done&&c.el===e.target.closest('.card'));if(r)drop(r)});
 async function place(r){for(let i=1;;i++){
   r.x=22+Math.random()*(W-30-r.w)|0;r.y=22+Math.random()*(H-30-r.h)|0;
   const hits=cards.filter(c=>hit(c,r));
   // free spot first; after 60 misses, take a spot covering only finished cards and evict just those
   if(!hits.length||(i>60&&hits.every(c=>c.done))){
-    for(const old of hits){cards.splice(cards.indexOf(old),1);old.el.classList.add('out');setTimeout(()=>old.el.remove(),400)}
+    hits.forEach(drop);
     console.assert(r.x>=14&&r.x+r.w<=W&&r.y+r.h<=H&&!cards.some(c=>hit(c,r)),'bad placement',r);cards.push(r);return}
   if(i%80==0)await sleep(300)}}
 
 /* ---- the one entry point: wire a real TikTok gift event to this later ---- */
-async function onGift({name,avatar,gift,count=1}){
-  const T=GIFTS[gift];if(!T)return;
-  addTally(gift,count);
+const isUrl=u=>/^https?:\/\//.test(u||'');
+async function onGift({name,avatar,giftName='Gift',icon='🎁',giftImg,coins=1,count=1}){
+  name=seg(String(name||'?')).slice(0,24).join('');coins=+coins||1;count=+count||1;
+  const T=tierFor(coins);
+  addTally(giftName,coins,count);
   const w=T.w,h=Math.round(w*1.25),r={w,h};
   const ws=await acquire(T.n),[a,b=a,c=b]=ws;
   const sel=el('div','sel',stage),badge=el('span','',sel);sel.style.display='none';
@@ -160,7 +177,8 @@ async function onGift({name,avatar,gift,count=1}){
       av.style.left=ax+'px';av.style.top=ay+'px';
       await move(b,x+ax,y+ay,350);click(900,.04);
       await tween(450,k=>{av.style.width=av.style.height=d*k+'px';set(b,x+ax+d*k,y+ay+d*k)});
-      av.firstChild.src=avatar;av.classList.add('show');click(700,.04);await sleep(450)};
+      const im=av.firstChild;im.onerror=()=>{im.onerror=null;im.src=fakeAvatar(name)}; // TikTok CDN link dead or blocked
+      im.src=isUrl(avatar)||/^data:image\//.test(avatar||'')?avatar:fakeAvatar(name);av.classList.add('show');click(700,.04);await sleep(450)};
 
     // 3. type the name with an I-beam
     const typeNm=async()=>{
@@ -176,7 +194,9 @@ async function onGift({name,avatar,gift,count=1}){
     else await Promise.all([drawAv(),typeNm(),T.n>2&&move(a,x+w/2,y+w*1.05,500)]);
 
     // 4. gift badge pops; the biggest prize gets a crown and a victory lap
-    gf.textContent=`${T.icon} ${T.label} ×${count}`;gf.classList.add('pop');click(1200,.09);
+    gf.textContent=`${isUrl(giftImg)?'':icon} ${giftName} ×${count}`;
+    if(isUrl(giftImg)){const g=document.createElement('img');g.src=giftImg;g.alt='';g.onerror=()=>g.remove();gf.prepend(g)}
+    gf.classList.add('pop');click(1200,.09);
     if(T.top){
       await move(a,x+w/2,y+ay-w*.25,350);card.lastChild.classList.add('on');click(500,.15);
       await move(a,x+w/2,y+ay,250);
@@ -198,15 +218,36 @@ function fakeAvatar(name){const c=document.createElement('canvas');c.width=c.hei
   const gr=g.createLinearGradient(0,0,160,160);gr.addColorStop(0,`hsl(${hue} 80% 62%)`);gr.addColorStop(1,`hsl(${(hue+70)%360} 80% 42%)`);
   g.fillStyle=gr;g.fillRect(0,0,160,160);g.fillStyle='#fff';g.font='bold 84px system-ui';g.textAlign='center';g.textBaseline='middle';
   g.fillText(seg(name)[0].toUpperCase(),80,86);return c.toDataURL()}
-function demo(gift){const name=NAMES[Math.random()*NAMES.length|0];
-  onGift({name,avatar:fakeAvatar(name),gift,count:GIFTS[gift].coins<10?1+(Math.random()*8|0):1})}
-const panel=document.getElementById('panel');
-for(const k of ids.slice().reverse()){const b=document.createElement('button');
-  b.dataset.t=k;b.textContent=GIFTS[k].icon;b.title=GIFTS[k].label;b.setAttribute('aria-label',GIFTS[k].label);panel.prepend(b)}
+const DEMO=[['🌹','Rose',1],['🤞','Finger Heart',5],['🍩','Doughnut',30],['🧢','Cap',99],['🌌','Galaxy',1000],['🦁','Lion',29999]];
+function demo(i){const name=NAMES[Math.random()*NAMES.length|0],[icon,giftName,coins]=DEMO[i];
+  onGift({name,avatar:fakeAvatar(name),giftName,icon,coins,count:coins<10?1+(Math.random()*8|0):1})}
+const panel=document.getElementById('panel'),q=new URLSearchParams(location.search),LIVE=q.has('live');
+DEMO.forEach(([icon,label],i)=>{const b=document.createElement('button');
+  b.dataset.t=i;b.textContent=icon;b.title=label;b.setAttribute('aria-label',label);panel.lastElementChild.before(b)});
 panel.addEventListener('click',e=>{if(e.target.dataset.t)demo(e.target.dataset.t)});
 const ODDS=[.45,.25,.14,.09,.05,.02]; // cheap gifts come often, the lion rarely
-(async function auto(){for(;;){await sleep(900+Math.random()*1800);
-  if(document.getElementById('auto').checked){let p=Math.random();demo(ids.find((_,i)=>(p-=ODDS[i])<0)||ids[0])}}})();
+if(!LIVE)(async function auto(){for(;;){await sleep(900+Math.random()*1800);
+  if(document.getElementById('auto').checked){let p=Math.random();demo(Math.max(0,ODDS.findIndex(o=>(p-=o)<0)))}}})();
+
+/* ---- live mode (?live): real gifts from the TikFinity desktop app's local socket ----
+   shortcut: field names follow TikTok-Live-Connector and were not checked against a real stream;
+   open with ?live&debug, read the raw events in the console, and adjust onEvent if a field differs. */
+function onEvent(msg){
+  if(q.has('debug'))console.log(JSON.stringify(msg));
+  if(!msg||(msg.event||msg.type)!=='gift')return;
+  const d=msg.data||msg,u=d.user||d,g=d.giftDetails||d; // flat in older versions, nested in newer ones
+  if(g.giftType===1&&!d.repeatEnd)return; // combo still running: wait for its final count, one card per combo
+  onGift({name:u.nickname||u.uniqueId,avatar:u.profilePictureUrl,giftName:g.giftName,giftImg:d.giftPictureUrl,
+    coins:g.diamondCount,count:d.repeatCount})}
+if(LIVE){
+  panel.hidden=true;
+  const status=el('div','status',stage);
+  (function connect(){
+    status.textContent='รอเชื่อมต่อ TikFinity…';
+    const ws=new WebSocket(q.get('ws')||'ws://localhost:21213/');
+    ws.onopen=()=>status.textContent='';
+    ws.onmessage=e=>{try{onEvent(JSON.parse(e.data))}catch(err){console.warn('bad event',err)}};
+    ws.onclose=()=>setTimeout(connect,3000)})()}
 </script>
 </body>
 </html>
